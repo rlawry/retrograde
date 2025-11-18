@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Retrograde of Mars</title>
+
+    <!-- Your own stylesheet -->
+    <link rel="stylesheet" type="text/css" href="./main.css">
+
+    <style>
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #000;
+        }
+
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #eccentricity {
+            position: absolute;
+            top: 0.5rem;
+            left: 0.5rem;
+            color: #fff;
+            font-family: system-ui, sans-serif;
+            font-size: 0.9rem;
+            z-index: 10;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="eccentricity"></div>
+
+    <script type="module">
+        import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.module.js';
+
+        // Scene, camera, renderer
+        const scene = new THREE.Scene();
+
+        const camera = new THREE.PerspectiveCamera(
+            60,
+            window.innerWidth / window.innerHeight,
+            0.1,
+            4000
+        );
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        // Materials and geometry
+        const sunMaterial = new THREE.MeshPhongMaterial({
+            color: 0xcebc21,
+            emissive: 0xffff00
+        });
+
+        const earthMaterial = new THREE.MeshPhongMaterial({
+            color: 0x156289,
+            emissive: 0x072534,
+            flatShading: true
+        });
+
+        const sphereRadius = 5;
+        const sphereGeometry = new THREE.SphereGeometry(sphereRadius, 20, 20);
+
+        // Sun
+        const sun = new THREE.Mesh(sphereGeometry, sunMaterial);
+        scene.add(sun);
+
+        // Planets array: 0 = Earth, 1 = Mars
+        const planet = [];
+        planet[0] = new THREE.Mesh(sphereGeometry, earthMaterial);
+        scene.add(planet[0]);
+
+        // Light from the Sun
+        const sunSpotlight = new THREE.PointLight(0xffffff, 10, 500);
+        sunSpotlight.position.set(0, 20, 0);
+        sunSpotlight.castShadow = true;
+        scene.add(sunSpotlight);
+
+        // Mars texture and mesh
+        const marsLoader = new THREE.TextureLoader();
+        marsLoader.load('./0Xmars.jpg', (marsTexture) => {
+            const marsMaterial = new THREE.MeshPhongMaterial({ map: marsTexture });
+            const marsGeometry = new THREE.SphereGeometry(sphereRadius, 20, 20);
+            planet[1] = new THREE.Mesh(marsGeometry, marsMaterial);
+            scene.add(planet[1]);
+
+            // Point the spotlight at Mars once it exists
+            sunSpotlight.target = planet[1];
+        });
+
+        // Orbital parameters
+        // a: semi-major axis (arbitrary units)
+        // e: eccentricity
+        function createOrbitingBody(a, e) {
+            const c = e * a;                          // focus distance
+            const b = Math.sqrt(a * a - c * c);       // semi-minor axis
+            return {
+                a,
+                b,
+                c,
+                e,
+                degrees: -180,
+                degreeOffset: 180,
+                gravitationalConstant: 0.00000000006673889,
+                MSun: 1988500,
+                GMSun: 1.32712440018,
+                orbitalSpeed: null,
+                orbitalSpeedActual: null
+            };
+        }
+
+        // Earth: nearly circular
+        const Earth = createOrbitingBody(220, 0.0167);
+
+        // Mars: set to true orbital eccentricity ~0.094
+        const Mars = createOrbitingBody(340, 0.094);
+
+        // Display the eccentricity (Mars)
+        const eccDiv = document.getElementById('eccentricity');
+        if (eccDiv) {
+            eccDiv.textContent = `Mars orbital eccentricity e ≈ ${Mars.e.toFixed(3)}`;
+        }
+
+        // Ellipse curves for orbits
+        const earthCurve = new THREE.EllipseCurve(
+            Earth.c, 0,       // center offset by c along x
+            Earth.a, Earth.b, // xRadius, yRadius
+            0, 2 * Math.PI,
+            false,
+            0
+        );
+
+        const marsCurve = new THREE.EllipseCurve(
+            Mars.c, 0,
+            Mars.a, Mars.b,
+            0, 2 * Math.PI,
+            false,
+            0
+        );
+
+        const points = 180;
+        const earthPoints = earthCurve.getPoints(points);
+        const marsPoints = marsCurve.getPoints(points);
+
+        const earthOrbitG = new THREE.BufferGeometry().setFromPoints(earthPoints);
+        const marsOrbitG = new THREE.BufferGeometry().setFromPoints(marsPoints);
+
+        const ellipseMaterial = new THREE.LineBasicMaterial({
+            color: 0xff1dce,
+            transparent: true,
+            opacity: 0.5
+        });
+
+        const ellipseEarth = new THREE.Line(earthOrbitG, ellipseMaterial);
+        const ellipseMars = new THREE.Line(marsOrbitG, ellipseMaterial);
+
+        // Lay the orbits down into the X–Z plane
+        ellipseEarth.rotation.x = Math.PI / 2;
+        ellipseMars.rotation.x = Math.PI / 2;
+
+        scene.add(ellipseEarth);
+        scene.add(ellipseMars);
+
+        // Background sky sphere
+        const skyLoader = new THREE.TextureLoader();
+        skyLoader.load('./eso_dark.jpg', (skyTexture) => {
+            const skyGeometry = new THREE.SphereGeometry(2000, 60, 40);
+            const skyMaterial = new THREE.MeshBasicMaterial({ map: skyTexture, side: THREE.DoubleSide });
+            const skyMesh = new THREE.Mesh(skyGeometry, skyMaterial);
+            scene.add(skyMesh);
+        });
+
+        // Orbital speed helpers
+        function initOrbitalSpeeds() {
+            // Uses a as an effective orbital radius in the original formula
+            Earth.orbitalSpeed =
+                (Math.sqrt(
+                    (Earth.gravitationalConstant * (Earth.MSun * Math.pow(10, 24))) /
+                    (Earth.a * Math.pow(10, 9))
+                ) / 1000) * 3600;
+
+            Mars.orbitalSpeed =
+                (Math.sqrt(
+                    (Mars.gravitationalConstant * (Mars.MSun * Math.pow(10, 24))) /
+                    (Mars.a * Math.pow(10, 9))
+                ) / 1000) * 3600;
+        }
+
+        function calculateOrbitalSpeedPlanet(obj) {
+            const theta = toRadians(obj.degrees);
+            const tx = obj.a * Math.cos(theta) + obj.c;
+            const ty = obj.b * Math.sin(theta);
+
+            const r = Math.sqrt(tx * tx + ty * ty); // distance from focus (Sun)
+            const speed =
+                (Math.sqrt(
+                    (obj.GMSun * Math.pow(10, 20)) *
+                    ((2 / (r * Math.pow(10, 9))) -
+                        (1 / (obj.a * Math.pow(10, 9))))
+                ) / 1000) * 3600;
+
+            return speed;
+        }
+
+        function toRadians(deg) {
+            return deg * (Math.PI / 180);
+        }
+
+        initOrbitalSpeeds();
+
+        // Initial camera height
+        camera.position.y = 500;
+
+        function updatePlanets() {
+            // Earth
+            Earth.orbitalSpeedActual = calculateOrbitalSpeedPlanet(Earth);
+            Earth.degrees -= ((360 / 365.256) * (Earth.orbitalSpeedActual / Earth.orbitalSpeed)) * 0.5;
+
+            // Mars
+            Mars.orbitalSpeedActual = calculateOrbitalSpeedPlanet(Mars);
+            Mars.degrees -= ((360 / 687) * (Mars.orbitalSpeedActual / Mars.orbitalSpeed)) * 0.5;
+
+            if (Earth.degrees < -360 - Earth.degreeOffset) {
+                Earth.degrees = -Earth.degreeOffset;
+            }
+            if (Mars.degrees < -360 - Mars.degreeOffset) {
+                Mars.degrees = -Mars.degreeOffset;
+            }
+        }
+
+        function setPlanetPositionFromOrbit(body, mesh) {
+            const theta = toRadians(body.degrees);
+            const x = body.c + body.a * Math.cos(theta);
+            const z = body.b * Math.sin(theta);
+            mesh.position.set(x, 0, z);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Move Earth and Mars
+            setPlanetPositionFromOrbit(Earth, planet[0]);
+            if (planet[1]) {
+                setPlanetPositionFromOrbit(Mars, planet[1]);
+            }
+
+            updatePlanets();
+
+            // Follow Earth, look at Mars
+            camera.position.x = planet[0].position.x;
+            camera.position.z = planet[0].position.z;
+            camera.position.y = 2;
+            if (planet[1]) {
+                camera.lookAt(planet[1].position);
+            } else {
+                camera.lookAt(sun.position);
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        window.addEventListener('resize', onWindowResize);
+    </script>
+</body>
+
+</html>
